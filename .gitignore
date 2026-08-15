@@ -1,0 +1,31 @@
+# .NET / C# build output
+bin/
+obj/
+*.user
+*.pdb
+*.suo
+.vs/
+Thumbs.db
+Desktop.ini
+
+# WorkBuddy local project memory (contains personal data — never publish)
+.workbuddy/
+
+# Legacy/unused upstream assemblies (documented in README as not required at runtime)
+lib/
+
+# Local reference copy of the upstream exe (downloaded for comparison only; never commit)
+cornradio-launcher.exe
+
+# Published build artifacts — regenerated via `dotnet build` + zip. The GitHub Release
+# already hosts launcher-portable.zip as a download, so keep these out of the repo.
+publish/*.zip
+publish/launcher-portable/launcher.exe
+publish/launcher-portable/launcher.exe.config
+
+# Runtime/user data inside the published package (generated at runtime, never track)
+publish/launcher-portable/launcher.json
+publish/launcher-portable/launcher.log
+publish/launcher-portable/notes.txt
+publish/launcher-portable/backups/
+publish/launcher-portable/icons/
