@@ -24,6 +24,22 @@ namespace launcher.Core
             return result;
         }
 
+        // 收集 notes/ 目录下所有便签文件，产出 (源文件, 包内路径 notes/<文件名>)
+        public static List<Tuple<string, string>> CollectNoteEntries(string baseDir)
+        {
+            var entries = new List<Tuple<string, string>>();
+            if (string.IsNullOrEmpty(baseDir)) return entries;
+            try
+            {
+                string dir = Path.Combine(baseDir, "notes");
+                if (!Directory.Exists(dir)) return entries;
+                foreach (var f in Directory.GetFiles(dir, "*.txt"))
+                    entries.Add(Tuple.Create(f, "notes/" + Path.GetFileName(f)));
+            }
+            catch { }
+            return entries;
+        }
+
         // 扫描所有页所有槽位的自定义图标，产出 (源文件, 包内路径 icons/<文件名>)；
         // 文件名重名时自动追加 _2/_3… 后缀去重，换机导入不互相覆盖。
         // 返回 (SourcePath, EntryName) 元组列表。

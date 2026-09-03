@@ -25,7 +25,7 @@
     <UpdateRequired>false</UpdateRequired>
     <MapFileExtensions>true</MapFileExtensions>
     <ApplicationRevision>0</ApplicationRevision>
-    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <ApplicationVersion>1.1.0.%2a</ApplicationVersion>
     <IsWebBootstrapper>false</IsWebBootstrapper>
     <UseApplicationTrust>false</UseApplicationTrust>
     <BootstrapperEnabled>true</BootstrapperEnabled>
@@ -80,6 +80,9 @@
     <Compile Include="Controls\IconSlot.cs" />
     <Compile Include="Controls\PageIndicator.cs" />
     <Compile Include="Controls\PageNameDialog.cs" />
+    <Compile Include="Controls\CommandDialog.cs" />
+    <Compile Include="Controls\CommandComboBox.cs" />
+    <Compile Include="Controls\CommandComboBox.cs" />
     <Compile Include="Controls\IconRenderer.cs" />
     <Compile Include="Controls\DesktopMouseHook.cs" />
     <Compile Include="Controls\SearchController.cs" />
@@ -89,6 +92,7 @@
     <Compile Include="Core\PinyinHelper.cs" />
     <Compile Include="Core\KeyRouter.cs" />
     <Compile Include="Core\ConfigExporter.cs" />
+    <Compile Include="Core\NotesStore.cs" />
     <Compile Include="Core\MarkdownRenderer.cs" />
     <Compile Include="Core\ThemePalette.cs" />
     <Compile Include="Core\HotkeyBinding.cs" />

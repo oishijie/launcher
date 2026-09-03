@@ -40,6 +40,13 @@ namespace launcher.Controls
         private readonly List<string> _pageTouchOrder = new List<string>();        // 页名最近使用顺序（末尾=最新）
         private const int PageCacheLimit = 4; // 最多同时保留渲染缓存页数；超出时释放最久未用页（搜索期间不驱逐）
 
+        // ===== 启动分批渲染（避免一次性渲染整页图标阻塞 UI 消息循环，导致启动慢/鼠标卡顿）=====
+        private Timer _initialRenderTimer;
+        private int _initialRenderCursor;
+        private string _initialRenderPage;
+        private const int InitialRenderBatchSize = 4;  // 每 tick 渲染几个图标
+        private const int InitialRenderInterval = 5;   // tick 间隔（ms）
+
         // ===== 撤销删除（引用 IconSlot，不再持有裸 PictureBox）=====
         private class DeletedSlot
         {
@@ -50,10 +57,15 @@ namespace launcher.Controls
         private const int MaxUndoDepth = 50;
         private const int DragThreshold = 5;
 
-        // ===== 便签持久化：自动保存（防抖）=====
+        // ===== 便签持久化（多便签）：自动保存（防抖）=====
         private Timer _notesTimer;
         private bool _suppressNotesSave = false;
-        private string NotesPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "notes.txt");
+        private NotesStore _notes;                       // 多便签存储（notes/ 目录，每条一个 .txt）
+        private readonly List<Button> _noteTabButtons = new List<Button>(); // 左边缘便签按钮
+        private ToolTip _noteTips;                       // 便签按钮悬停提示（显示完整便签名）
+        private string _notesPath => _notes != null
+            ? Path.Combine(_notes.NotesDirectory, _notes.CurrentName + ".txt")
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "notes.txt"); // 兼容：_notes 未初始化时退回旧路径
 
         // ===== 动画定时器 =====
         private Timer _animationTimer;
@@ -215,6 +227,7 @@ namespace launcher.Controls
             exitToolStripMenuItem.ForeColor = _palette.MenuFore;
             btnPinTop.ForeColor = this.TopMost ? _palette.AccentStick : Color.Silver;
             btnNotes.ForeColor = _palette.AccentPencil;
+            HighlightCurrentNote(); // 便签列表栏随主题换肤
 
             RefreshPageIndicator();
             foreach (var slot in _slots) slot.ApplyTheme(_palette);
@@ -292,7 +305,7 @@ namespace launcher.Controls
                                 _store.Layout.IconSize, _store.Layout.IconSize, d.FilePath, d.IconPath);
                         d.CachedImage?.Dispose();
                         d.CachedImage = IconRenderer.ComposeBitmap(
-                            d.RawIcon, _store.Layout.IconSize, _store.Layout.IconSize, d.FilePath, _palette);
+                            d.RawIcon, _store.Layout.IconSize, _store.Layout.IconSize, d.FilePath, _palette, d.DisplayName);
                     }
                 }
                 // 当前页刷到屏幕上（其余页下次切到/搜索到即用新配色位图）
@@ -342,6 +355,13 @@ namespace launcher.Controls
                 slot.DeleteRequested += (s, e) => DeleteSlot(slot);
                 slot.SetIconRequested += (s, e) => SetSlotIcon(slot);
                 slot.ClearIconRequested += (s, e) => ClearSlotIcon(slot);
+                slot.AddCommandRequested += (s, e) => AddOrEditCommand(slot);
+                slot.MoveToPageRequested += (s, dir) => MoveSlotToPage(slot, dir);
+                slot.CanMovePrev = () => _store.PageNames.IndexOf(_currentPageName) > 0;
+                slot.CanMoveNext = () => _store.PageNames.IndexOf(_currentPageName) < _store.PageNames.Count - 1;
+                slot.MoveToPageRequested += (s, dir) => MoveSlotToPage(slot, dir);
+                slot.CanMovePrev = () => _store.PageNames.IndexOf(_currentPageName) > 0;
+                slot.CanMoveNext = () => _store.PageNames.IndexOf(_currentPageName) < _store.PageNames.Count - 1;
                 slot.FileDropped += (s, path) => HandleFileDropped(slot, path);
                 slot.DropTarget += (s, src) => SwapSlots(src, slot);
                 slot.DragStarted += (s, e) => { _dragSourceSlot = slot; };
@@ -408,7 +428,8 @@ namespace launcher.Controls
         }
 
         // 便签面板随窗口尺寸自适应：面板铺满内容区（标题栏以下），
-        // 「预览」按钮贴在右上角、文本框/预览框占满剩余区域——缩放后按钮不再跑到窗外
+        // 左边缘为便签列表栏（多便签切换），「预览」按钮贴在右上角、
+        // 文本框/预览框占列表栏右侧的剩余区域——缩放后按钮不再跑到窗外
         private void RepositionNotesPanel()
         {
             if (panel2 == null || !panel2.Visible) return;
@@ -419,17 +440,23 @@ namespace launcher.Controls
             panel2.Height = Math.Max(0, h - 24);
 
             const int margin = 8;
+            const int listW = 46;          // 左边缘便签列表栏宽度
             int btnW = btnMdToggle.Width;
             int top = 6;
+
+            // 便签列表栏：贴左边缘，占满面板高度（内部按钮自动从上往下排，超出滚动）
+            panelNotesList.Location = new Point(0, 0);
+            panelNotesList.Size = new Size(listW, panel2.Height);
+
             // 「预览」按钮：右上角，始终保持在面板可视区域内
-            btnMdToggle.Location = new Point(Math.Max(margin, panel2.Width - btnW - margin), top);
+            btnMdToggle.Location = new Point(Math.Max(margin + listW, panel2.Width - btnW - margin), top);
             btnMdToggle.BringToFront();
 
-            // 编辑框与预览框共用同一区域，预留顶部按钮栏
+            // 编辑框与预览框共用同一区域：列表栏右侧、顶部按钮栏以下
             int textTop = top + 34;
-            int tw = Math.Max(20, panel2.Width - margin * 2);
+            int tw = Math.Max(20, panel2.Width - listW - margin * 2);
             int th = Math.Max(20, panel2.Height - textTop - margin);
-            textBox1.Location = new Point(margin, textTop);
+            textBox1.Location = new Point(listW + margin, textTop);
             textBox1.Size = new Size(tw, th);
             rtbNotesPreview.Location = textBox1.Location;
             rtbNotesPreview.Size = textBox1.Size;
@@ -471,7 +498,12 @@ namespace launcher.Controls
             // 钩子不在构造函数安装：WH_MOUSE_LL 回调须由本线程消息循环执行，
             // 开机自启时构造函数还在做加载等繁重工作（未进消息循环），安装过早会让全局鼠标输入被卡住发飘。
             // 推迟到首次显示后安装，此时消息循环已就绪，不再拖累启动。
-            this.Shown += (s, e) => _desktopMouseHook.Install();
+            // 同时分批异步渲染当前页图标，避免一次性渲染阻塞消息循环导致鼠标卡顿。
+            this.Shown += (s, e) =>
+            {
+                _desktopMouseHook.Install();
+                StartInitialPageRender(_currentPageName);
+            };
 
             _animationTimer = new Timer();
             _animationTimer.Interval = 50;
@@ -490,13 +522,19 @@ namespace launcher.Controls
                 _notesTimer.Stop();
                 _notesTimer.Start();
             };
-            LoadNotes();
+            // 多便签：初始化存储并加载当前便签，刷新左边缘列表
+            _notes = new NotesStore(AppDomain.CurrentDomain.BaseDirectory);
+            _notes.Load();
+            _suppressNotesSave = true;
+            textBox1.Text = _notes.Read(_notes.CurrentName);
+            _suppressNotesSave = false;
+            RefreshNotesList();
 
             // 托盘菜单"开机自启"按当前注册表状态打勾
             try { autostartToolStripMenuItem.Checked = AutoStartManager.IsEnabled(); } catch { }
 
-            EnsurePageLoaded(_currentPageName);
-            LoadPageFromCache(_currentPageName); // 启动时只渲染并显示当前页（懒加载）
+            // 启动时只设主题色/圆点（快），不渲染图标——图标在 Shown 后分批异步渲染，
+            // 避免构造函数同步渲染整页图标阻塞 UI 消息循环，导致窗口迟迟不显示 + 鼠标卡顿。
             ApplyThemeVisuals();
             Log("启动完成，当前配置: " + _currentPageName + "，主题=" + (_theme == ThemeMode.Dark ? "Dark" : "Light"));
         }
@@ -557,16 +595,83 @@ namespace launcher.Controls
             _animationTimer.Start();
             try
             {
-                string filePath = slot.Data.FilePath;
-                if (slot.Data.IsFolder) System.Diagnostics.Process.Start("explorer.exe", filePath);
-                else System.Diagnostics.Process.Start(filePath);
+                LaunchPath(slot.Data.FilePath, slot.Data.IsFolder);
                 HidePanelAfterOpen();
             }
             catch (Exception ex)
             {
-                Log("启动失败: " + ex);
-                MessageBox.Show("启动失败：" + ex.Message);
+                Log("启动失败: " + ex + " 命令: " + slot.Data.FilePath);
+                MessageBox.Show("启动失败：" + ex.Message + "\n命令/路径：" + slot.Data.FilePath, "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+        }
+
+        // 统一启动入口：支持 文件/文件夹/URL/GUID(::{CLSID})/shell:路径/shell 命令(带参数)
+        // 用户在 launcher.json 的 path 字段填入即可，图标用右键「设置自定义图标」提供。
+        private static void LaunchPath(string filePath, bool isFolder)
+        {
+            if (string.IsNullOrEmpty(filePath)) return;
+
+            // GUID（::{CLSID}，如此电脑/回收站/控制面板）或 shell: 路径（如 shell:AppsFolder）→ explorer.exe 打开
+            if (filePath.StartsWith("::") || filePath.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+            {
+                System.Diagnostics.Process.Start("explorer.exe", filePath);
+                return;
+            }
+
+            // URL → 默认浏览器
+            if (UrlUtil.IsHttpUrl(filePath))
+            {
+                System.Diagnostics.Process.Start(filePath);
+                return;
+            }
+
+            // 文件夹 → explorer
+            if (isFolder || Directory.Exists(filePath))
+            {
+                System.Diagnostics.Process.Start("explorer.exe", filePath);
+                return;
+            }
+
+            // 文件 / 命令：先尝试直接启动（关联打开 / .exe / .lnk），
+            // 失败则解析为命令行（支持 cmd /c dir、powershell -Command ... 等带参数命令）。
+            try
+            {
+                System.Diagnostics.Process.Start(filePath);
+            }
+            catch
+            {
+                // 直接启动失败（含空格/参数的命令串）→ 解析为命令+参数
+                var (fileName, args) = ParseCommandLine(filePath);
+                if (string.IsNullOrEmpty(fileName)) return;
+                // 先用 UseShellExecute=true（ShellExecute 查 PATH + 关联，对 "cmd" 等无扩展名命令更灵活）
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fileName, args) { UseShellExecute = true });
+                }
+                catch
+                {
+                    // 再用 UseShellExecute=false（CreateProcess，支持 cmd /c echo > file 等重定向/管道）
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fileName, args) { UseShellExecute = false });
+                }
+            }
+        }
+
+        // 简单命令行解析：支持引号包裹的路径 + 多参数。如 "cmd /c dir" → ("cmd", "/c dir")
+        private static (string FileName, string Arguments) ParseCommandLine(string cmd)
+        {
+            cmd = cmd.Trim();
+            if (string.IsNullOrEmpty(cmd)) return ("", "");
+            // 引号包裹的第一段（路径含空格）
+            if (cmd[0] == '"')
+            {
+                int end = cmd.IndexOf('"', 1);
+                if (end > 0)
+                    return (cmd.Substring(1, end - 1), end + 1 < cmd.Length ? cmd.Substring(end + 1).Trim() : "");
+            }
+            // 按第一个空格分割命令与参数
+            int space = cmd.IndexOf(' ');
+            if (space < 0) return (cmd, "");
+            return (cmd.Substring(0, space), cmd.Substring(space + 1));
         }
 
         // 点击图标打开后主动隐藏面板，避免目标程序未抢焦(focus)时 Deactivate 不触发导致面板残留
@@ -638,6 +743,9 @@ namespace launcher.Controls
                     if (stored.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
                         stored = stored.Substring(baseDir.Length).TrimStart('\\', '/');
                     slot.Data.IconPath = stored;
+                    // 清除旧 RawIcon/CachedImage，强制 RenderSlotFromStore 重新提取图标。
+                    // 否则 RawIcon 复用旧系统图标，RenderIconOnly 被跳过，自定义图标不生效。
+                    slot.Data.DisposeImage();
                     SaveConfig();
                     RenderSlotFromStore(slot);
                     Log("设置自定义图标: " + stored);
@@ -653,11 +761,65 @@ namespace launcher.Controls
             try
             {
                 slot.Data.IconPath = string.Empty;
+                // 清除旧 RawIcon/CachedImage（含自定义图标），强制回退到系统图标
+                slot.Data.DisposeImage();
                 SaveConfig();
                 RenderSlotFromStore(slot);
                 Log("清除自定义图标: " + slot.Data.FilePath);
             }
             catch (Exception ex) { Log("清除自定义图标失败: " + ex.Message); }
+        }
+
+        // 右键菜单：添加/编辑命令/路径（支持文件/文件夹/URL/GUID/shell:路径/shell 命令）
+        // 用户输入命令串，写入槽位；图标由用户后续右键「设置自定义图标」提供
+        private void AddOrEditCommand(IconSlot slot)
+        {
+            try
+            {
+                string initialCmd = (slot.Data != null && !slot.Data.IsEmpty) ? slot.Data.FilePath : "";
+                string initialName = (slot.Data != null) ? (slot.Data.DisplayName ?? "") : "";
+                bool empty = string.IsNullOrEmpty(initialCmd);
+                using (var dlg = new CommandDialog(
+                    empty ? "添加命令/路径" : "编辑命令/路径",
+                    initialCmd, initialName, _palette))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    if (string.IsNullOrEmpty(dlg.Command)) return;
+                    var data = new SlotData(slot.SlotIndex) { FilePath = dlg.Command, IsFolder = false, DisplayName = dlg.DisplayName ?? "" };
+                    _store.SetSlot(_currentPageName, slot.SlotIndex, data);
+                    SaveConfig();
+                    RenderSlotFromStore(slot);
+                    Log((empty ? "添加" : "编辑") + "命令/路径: " + dlg.Command + (string.IsNullOrEmpty(dlg.DisplayName) ? "" : "（名称=" + dlg.DisplayName + "）"));
+                }
+            }
+            catch (Exception ex) { Log("添加/编辑命令失败: " + ex.Message); }
+        }
+
+        // 右键菜单：移动当前槽位到上一页/下一页的相同位置（direction=-1 上一页 / +1 下一页）
+        private void MoveSlotToPage(IconSlot slot, int direction)
+        {
+            if (slot.Data == null || slot.Data.IsEmpty) return;
+            int curIdx = _store.PageNames.IndexOf(_currentPageName);
+            int targetIdx = curIdx + direction;
+            if (targetIdx < 0 || targetIdx >= _store.PageNames.Count) return;
+            string targetPage = _store.PageNames[targetIdx];
+            // 复制当前槽位数据到目标页相同 index
+            var data = slot.Data;
+            var newData = new SlotData(slot.SlotIndex)
+            {
+                FilePath = data.FilePath,
+                IsFolder = data.IsFolder,
+                IconPath = data.IconPath,
+                DisplayName = data.DisplayName
+            };
+            _store.SetSlot(targetPage, slot.SlotIndex, newData);
+            // 当前槽位清空
+            _store.RemoveSlot(_currentPageName, slot.SlotIndex);
+            // 目标页若已缓存，释放缓存使下次切到时重新渲染（否则会显示旧位图）
+            if (_pageCacheLoaded.Contains(targetPage)) ReleasePageCache(targetPage);
+            SaveConfig();
+            RenderSlotFromStore(slot);
+            Log($"移动槽位 {slot.SlotIndex} 从 {_currentPageName} 到 {targetPage}");
         }
 
         private void HandleFileDropped(IconSlot slot, string filePath)
@@ -697,7 +859,7 @@ namespace launcher.Controls
                 if (data.RawIcon == null)
                     data.RawIcon = IconRenderer.RenderIconOnly(slot.Width, slot.Height, data.FilePath, data.IconPath);
                 data.CachedImage?.Dispose();
-                data.CachedImage = IconRenderer.ComposeBitmap(data.RawIcon, slot.Width, slot.Height, data.FilePath, _palette);
+                data.CachedImage = IconRenderer.ComposeBitmap(data.RawIcon, slot.Width, slot.Height, data.FilePath, _palette, data.DisplayName);
             }
             else
             {
@@ -783,29 +945,161 @@ namespace launcher.Controls
             }
         }
 
-        // ===== 便签持久化 =====
+        // ===== 便签持久化（多便签）=====
         private void SaveNotes()
         {
-            try
-            {
-                string content = textBox1.Text ?? string.Empty;
-                File.WriteAllText(NotesPath, content, Encoding.UTF8);
-            }
-            catch (Exception ex) { Log("保存便签失败: " + ex); }
+            if (_notes == null) return;
+            _notes.Write(_notes.CurrentName, textBox1.Text ?? string.Empty);
         }
 
-        private void LoadNotes()
+        // 刷新左边缘便签列表：每条便签一个按钮，从上往下整齐排列；当前便签高亮。
+        // 按钮显示便签名的首行摘要（过长截断），悬停 Tooltip 显示全名。
+        private void RefreshNotesList()
         {
+            if (_notes == null || flowNotesList == null) return;
             try
             {
-                if (File.Exists(NotesPath))
+                if (_noteTips == null) _noteTips = new ToolTip();
+                // 清空旧按钮
+                foreach (var b in _noteTabButtons) { flowNotesList.Controls.Remove(b); b.Dispose(); }
+                _noteTabButtons.Clear();
+
+                var names = _notes.ListNames();
+                foreach (var name in names)
                 {
-                    _suppressNotesSave = true;
-                    textBox1.Text = File.ReadAllText(NotesPath, Encoding.UTF8);
-                    _suppressNotesSave = false;
+                    var btn = new Button();
+                    btn.FlatStyle = FlatStyle.Flat;
+                    btn.FlatAppearance.BorderSize = 0;
+                    btn.Font = new Font("微软雅黑", 8.25F, FontStyle.Regular, GraphicsUnit.Point, ((byte)(134)));
+                    btn.Size = new Size(38, 28);
+                    btn.Margin = new Padding(1, 1, 1, 1);
+                    btn.Cursor = Cursors.Hand;
+                    btn.Tag = name;
+                    // 摘要：取便签内容首行非空文字，最多 3 字（列宽窄），空便签显示首字
+                    string content = _notes.Read(name);
+                    string firstLine = (content ?? "").Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+                    string summary = string.IsNullOrWhiteSpace(firstLine)
+                        ? (name.Length > 2 ? name.Substring(0, 2) : name)
+                        : firstLine.Trim();
+                    if (summary.Length > 3) summary = summary.Substring(0, 3);
+                    btn.Text = summary;
+                    _noteTips.SetToolTip(btn, name); // 悬停显示完整便签名
+                    btn.Click += (s, e) => SwitchNote(name);
+                    btn.MouseUp += (s, e) =>
+                    {
+                        if (e.Button == MouseButtons.Right) ShowNoteTabMenu(name);
+                    };
+                    _noteTabButtons.Add(btn);
+                    flowNotesList.Controls.Add(btn);
+                }
+                HighlightCurrentNote();
+            }
+            catch (Exception ex) { Log("刷新便签列表失败: " + ex.Message); }
+        }
+
+        // 当前便签按钮高亮（选中色随主题）
+        private void HighlightCurrentNote()
+        {
+            Color active = _theme == ThemeMode.Dark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(220, 230, 245);
+            Color activeFore = _theme == ThemeMode.Dark ? Color.White : Color.Black;
+            Color idleBack = _theme == ThemeMode.Dark ? Color.FromArgb(38, 38, 38) : Color.FromArgb(240, 240, 240);
+            Color idleFore = _theme == ThemeMode.Dark ? Color.Silver : Color.DimGray;
+            foreach (var b in _noteTabButtons)
+            {
+                bool current = string.Equals(b.Tag as string, _notes?.CurrentName, StringComparison.Ordinal);
+                b.BackColor = current ? active : idleBack;
+                b.ForeColor = current ? activeFore : idleFore;
+            }
+            if (panelNotesList != null)
+                panelNotesList.BackColor = _theme == ThemeMode.Dark ? Color.FromArgb(25, 25, 25) : Color.FromArgb(235, 235, 235);
+            if (btnAddNote != null)
+            {
+                btnAddNote.BackColor = _theme == ThemeMode.Dark ? Color.FromArgb(25, 25, 25) : Color.FromArgb(235, 235, 235);
+                btnAddNote.ForeColor = _theme == ThemeMode.Dark ? Color.Silver : Color.DimGray;
+            }
+        }
+
+        // 切换便签：先保存当前，再加载目标便签内容
+        private void SwitchNote(string name)
+        {
+            if (_notes == null || name == _notes.CurrentName) return;
+            SaveNotes(); // 切走前落盘当前便签
+            // 预览态先切回编辑态，避免预览内容与新便签错位
+            if (_notesPreviewing) btnMdToggle.PerformClick();
+            if (_notes.SetCurrent(name))
+            {
+                _suppressNotesSave = true;
+                textBox1.Text = _notes.Read(name);
+                _suppressNotesSave = false;
+                HighlightCurrentNote();
+                Log("切换便签: " + name);
+            }
+        }
+
+        // 便签按钮右键菜单：重命名 / 删除
+        private void ShowNoteTabMenu(string name)
+        {
+            using (var menu = new ContextMenuStrip())
+            {
+                var renameItem = new ToolStripMenuItem("重命名");
+                renameItem.Click += (s, e) => RenameNote(name);
+                var deleteItem = new ToolStripMenuItem("删除");
+                deleteItem.Click += (s, e) => DeleteNote(name);
+                menu.Items.Add(renameItem);
+                menu.Items.Add(deleteItem);
+                menu.Show(Cursor.Position);
+            }
+        }
+
+        private void RenameNote(string name)
+        {
+            using (var dlg = new PageNameDialog("重命名便签", name, _palette))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (_notes.Rename(name, dlg.PageName))
+                {
+                    RefreshNotesList();
+                    if (_notes.CurrentName == dlg.PageName)
+                    {
+                        _suppressNotesSave = true;
+                        textBox1.Text = _notes.Read(dlg.PageName);
+                        _suppressNotesSave = false;
+                    }
+                    SaveNotes();
+                    Log("重命名便签: " + name + " → " + dlg.PageName);
                 }
             }
-            catch (Exception ex) { Log("读取便签失败: " + ex); }
+        }
+
+        private void DeleteNote(string name)
+        {
+            var r = MessageBox.Show("确定删除便签「" + name + "」吗？\n删除后不可恢复。",
+                "删除便签", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (r != DialogResult.Yes) return;
+            if (_notes.Delete(name))
+            {
+                _suppressNotesSave = true;
+                textBox1.Text = _notes.Read(_notes.CurrentName);
+                _suppressNotesSave = false;
+                RefreshNotesList();
+                Log("删除便签: " + name);
+            }
+        }
+
+        // 「+」新建便签：自动命名，立即出现在列表顶部序列并切换过去
+        private void btnAddNote_Click(object sender, EventArgs e)
+        {
+            if (_notes == null) return;
+            SaveNotes(); // 先保存当前，防止丢字
+            string name = _notes.CreateNote(null);
+            if (name == null) { Log("新建便签失败"); return; }
+            _notes.SetCurrent(name);
+            _suppressNotesSave = true;
+            textBox1.Text = string.Empty;
+            _suppressNotesSave = false;
+            RefreshNotesList();
+            textBox1.Focus();
+            Log("新建便签: " + name);
         }
 
         // ===== 便签 Markdown 预览（纯逻辑在 Core/MarkdownRenderer，可单测）=====
@@ -933,6 +1227,54 @@ namespace launcher.Controls
             _pageTouchOrder.Clear();
         }
 
+        // 启动时分批异步渲染当前页图标：每 tick 渲染少量图标后让出控制权，
+        // 消息循环得以在渲染间隙处理鼠标事件（含低级鼠标钩子回调），避免一次性渲染导致鼠标卡顿。
+        private void StartInitialPageRender(string pageName)
+        {
+            // 停止可能在跑的上一轮分批渲染（如用户快速切页），避免两个 Timer 同时渲染
+            try { _initialRenderTimer?.Stop(); _initialRenderTimer?.Dispose(); } catch { }
+            _initialRenderTimer = null;
+            var list = _store.GetPage(pageName);
+            if (list == null) { EnsurePageLoaded(pageName); LoadPageFromCache(pageName); return; }
+            _initialRenderPage = pageName;
+            _initialRenderCursor = 0;
+            _initialRenderTimer = new Timer { Interval = InitialRenderInterval };
+            _initialRenderTimer.Tick += InitialRenderTimer_Tick;
+            _initialRenderTimer.Start();
+        }
+
+        private void InitialRenderTimer_Tick(object sender, EventArgs e)
+        {
+            try
+            {
+                // 渲染期间用户已切页：停止分批，交由 SwitchToPage 的 EnsurePageLoaded 接管
+                if (_currentPageName != _initialRenderPage) { _initialRenderTimer.Stop(); return; }
+                var list = _store.GetPage(_initialRenderPage);
+                if (list == null) { _initialRenderTimer.Stop(); return; }
+                int end = Math.Min(_initialRenderCursor + InitialRenderBatchSize, list.Count);
+                for (int i = _initialRenderCursor; i < end; i++)
+                {
+                    var data = list[i];
+                    if (data == null || data.IsEmpty) { data?.DisposeImage(); continue; }
+                    if (data.RawIcon == null)
+                        data.RawIcon = IconRenderer.RenderIconOnly(_store.Layout.IconSize, _store.Layout.IconSize, data.FilePath, data.IconPath);
+                    data.CachedImage?.Dispose();
+                    data.CachedImage = IconRenderer.ComposeBitmap(data.RawIcon, _store.Layout.IconSize, _store.Layout.IconSize, data.FilePath, _palette, data.DisplayName);
+                }
+                LoadPageFromCache(_initialRenderPage);
+                _initialRenderCursor = end;
+                if (_initialRenderCursor >= list.Count)
+                {
+                    _initialRenderTimer.Stop();
+                    if (!_pageCacheLoaded.Contains(_initialRenderPage)) _pageCacheLoaded.Add(_initialRenderPage);
+                    TouchPage(_initialRenderPage);
+                    EnforcePageCacheLimit();
+                }
+                Invalidate();
+            }
+            catch (Exception ex) { Log("启动渲染图标失败: " + ex.Message); try { _initialRenderTimer?.Stop(); } catch { } }
+        }
+
         private void LoadPageToCache(string pageName)
         {
             if (!_store.Pages.ContainsKey(pageName)) return;
@@ -978,9 +1320,19 @@ namespace launcher.Controls
             if (index < 0 || index >= _store.PageNames.Count) return;
             _pageIndicator.SelectedIndex = index;
             _currentPageName = _store.PageNames[index];
-            EnsurePageLoaded(_currentPageName); // 懒加载：切到哪页才渲染哪页（其余页缓存交给 LRU 管理）
             clearImageBoxes();
-            LoadPageFromCache(_currentPageName);
+            if (_pageCacheLoaded.Contains(_currentPageName))
+            {
+                // 已缓存：直接显示（TouchPage 维持 LRU 顺序）
+                TouchPage(_currentPageName);
+                EnforcePageCacheLimit();
+                LoadPageFromCache(_currentPageName);
+            }
+            else
+            {
+                // 未缓存：分批渲染，避免一次性渲染整页图标阻塞消息循环导致鼠标卡顿
+                StartInitialPageRender(_currentPageName);
+            }
             // 切页后保持搜索状态一致：聚焦时按当前查询重过滤，否则恢复全部可见
             if (searchBox != null && searchBox.Focused)
                 _search.ApplyFilter(searchBox.Text == SearchCue ? "" : searchBox.Text);
@@ -1027,6 +1379,7 @@ namespace launcher.Controls
             UnregisterGlobalHotkeys();
             _configWatcher?.Dispose();
             _desktopMouseHook.Uninstall();
+            try { _initialRenderTimer?.Stop(); _initialRenderTimer?.Dispose(); } catch { }
             SaveConfig();
             SaveNotes();
 
@@ -1147,6 +1500,9 @@ namespace launcher.Controls
                     using (var zip = ZipFile.Open(dlg.FileName, ZipArchiveMode.Create))
                     {
                         foreach (var f in sources) zip.CreateEntryFromFile(f, Path.GetFileName(f));
+                        // 多便签：notes/ 目录下所有便签一并打包
+                        foreach (var (src, entry) in ConfigExporter.CollectNoteEntries(baseDir))
+                            zip.CreateEntryFromFile(src, entry);
                         // 把各槽位引用的自定义图标一并打包，换机不丢图（去重逻辑已抽到 ConfigExporter）
                         foreach (var (src, entry) in ConfigExporter.CollectIconEntries(_store))
                             zip.CreateEntryFromFile(src, entry);

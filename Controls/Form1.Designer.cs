@@ -44,6 +44,9 @@ namespace launcher.Controls
             this.btnPinTop = new System.Windows.Forms.Button();
             this.btnNotes = new System.Windows.Forms.Button();
             this.panel2 = new System.Windows.Forms.Panel();
+            this.panelNotesList = new System.Windows.Forms.Panel();
+            this.flowNotesList = new System.Windows.Forms.FlowLayoutPanel();
+            this.btnAddNote = new System.Windows.Forms.Button();
             this.textBox1 = new System.Windows.Forms.TextBox();
             this.rtbNotesPreview = new System.Windows.Forms.RichTextBox();
             this.btnMdToggle = new System.Windows.Forms.Button();
@@ -272,12 +275,54 @@ namespace launcher.Controls
             this.searchBox.TextChanged += new System.EventHandler(this.SearchBox_TextChanged);
             this.searchBox.Enter += new System.EventHandler(this.SearchBox_Enter);
             this.searchBox.Leave += new System.EventHandler(this.SearchBox_Leave);
-            // 
+            //
+            // panelNotesList（便签列表栏：贴面板左边缘，竖排便签按钮 + 新建按钮）
+            //
+            this.panelNotesList.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(25)))), ((int)(((byte)(25)))), ((int)(((byte)(25)))));
+            this.panelNotesList.Location = new System.Drawing.Point(0, 0);
+            this.panelNotesList.Name = "panelNotesList";
+            this.panelNotesList.Size = new System.Drawing.Size(46, 334);
+            this.panelNotesList.TabIndex = 3;
+            //
+            // flowNotesList（便签按钮容器，从上往下排列）
+            //
+            this.flowNotesList.AutoScroll = true;
+            this.flowNotesList.BackColor = System.Drawing.Color.Transparent;
+            this.flowNotesList.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.flowNotesList.FlowDirection = System.Windows.Forms.FlowDirection.TopDown;
+            this.flowNotesList.Location = new System.Drawing.Point(0, 0);
+            this.flowNotesList.Name = "flowNotesList";
+            this.flowNotesList.Padding = new System.Windows.Forms.Padding(4, 4, 0, 4);
+            this.flowNotesList.Size = new System.Drawing.Size(46, 310);
+            this.flowNotesList.TabIndex = 0;
+            this.flowNotesList.WrapContents = false;
+            //
+            // btnAddNote（新建便签按钮，列表栏顶部）
+            //
+            this.btnAddNote.Dock = System.Windows.Forms.DockStyle.Top;
+            this.btnAddNote.FlatAppearance.BorderSize = 0;
+            this.btnAddNote.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnAddNote.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnAddNote.ForeColor = System.Drawing.Color.Silver;
+            this.btnAddNote.Location = new System.Drawing.Point(0, 0);
+            this.btnAddNote.Name = "btnAddNote";
+            this.btnAddNote.Size = new System.Drawing.Size(46, 30);
+            this.btnAddNote.TabIndex = 1;
+            this.btnAddNote.Text = "+";
+            this.btnAddNote.UseVisualStyleBackColor = false;
+            this.btnAddNote.Click += new System.EventHandler(this.btnAddNote_Click);
+            //
+            // 控件挂接：列表栏 = 新建按钮（顶部 Dock）+ 便签按钮容器（Fill）
+            //
+            this.panelNotesList.Controls.Add(this.flowNotesList);
+            this.panelNotesList.Controls.Add(this.btnAddNote);
+            //
             // panel2
-            // 
+            //
             this.panel2.Controls.Add(this.btnMdToggle);
             this.panel2.Controls.Add(this.rtbNotesPreview);
             this.panel2.Controls.Add(this.textBox1);
+            this.panel2.Controls.Add(this.panelNotesList);
             this.panel2.Location = new System.Drawing.Point(2, 370);
             this.panel2.Name = "panel2";
             this.panel2.Size = new System.Drawing.Size(552, 334);
@@ -374,6 +419,9 @@ namespace launcher.Controls
         private System.Windows.Forms.Button btnNotes;
         private System.Windows.Forms.Button btnTheme;
         private System.Windows.Forms.Panel panel2;
+        private System.Windows.Forms.Panel panelNotesList;
+        private System.Windows.Forms.FlowLayoutPanel flowNotesList;
+        private System.Windows.Forms.Button btnAddNote;
         private System.Windows.Forms.TextBox textBox1;
         private System.Windows.Forms.RichTextBox rtbNotesPreview;
         private System.Windows.Forms.Button btnMdToggle;
