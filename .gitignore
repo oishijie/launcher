@@ -29,3 +29,17 @@ publish/launcher-portable/launcher.log
 publish/launcher-portable/notes.txt
 publish/launcher-portable/backups/
 publish/launcher-portable/icons/
+
+# Bundled Everything (voidtools) binaries — third-party GPL software, ~3.4 MB.
+# NOT tracked in git; shipped inside launcher-portable.zip on the GitHub Release.
+# The app has a full fallback chain (SDK -> bundled exe -> es.exe), so a fresh
+# clone builds fine without this directory.
+everything/
+
+# Local agent tooling / scratch (never publish)
+.agent-kernel/
+tools/
+
+# Local config backups and standalone test artifacts
+launcher-json-backup-*.json
+tests/RtfTableTest/

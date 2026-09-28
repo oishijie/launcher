@@ -12,6 +12,7 @@ namespace launcher.Models
         [DataMember] public string FilePath = string.Empty; // 文件 / 文件夹 / http(s) 链接；空串表示空槽
         [DataMember] public bool IsFolder;      // 是否为文件夹
         [DataMember] public string IconPath = string.Empty; // 用户自定义图标路径（绝对或相对程序目录）；空=自动
+        [DataMember] public string DisplayName = string.Empty; // 用户自定义显示名称（显示在图标下方）；空=自动推断
         public Image CachedImage;               // 渲染后的位图（分页缓存）；不参与序列化
         public Image RawIcon;                    // 纯图标位图（不含文字标签，主题无关）；用于主题切换时快速合成
 

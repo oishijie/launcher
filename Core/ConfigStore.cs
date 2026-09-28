@@ -26,6 +26,18 @@ namespace launcher.Core
         // bool? + EmitDefaultValue=false：缺省(未写)=true 启用；显式 false=关闭。
         [DataMember(Name = "dblClickShow", EmitDefaultValue = false)] public bool? DblClickShow = null;
         public bool DblClickShowEffective => DblClickShow ?? true;
+        // 主面板不透明度（百分比，100=完全不透明）。<100 会把窗口变成 WS_EX_LAYERED 分层窗口，
+        // 子控件重绘要经 DWM alpha 合成、鼠标扫过图标网格时略卡；性能优先建议保持 100。
+        [DataMember(Name = "opacity", EmitDefaultValue = false)] public int Opacity = 100;
+        // 贴边自动隐藏：面板拖到屏幕左/右/上边缘停稳后自动缩进去只留一条边，鼠标移上去再滑出来。
+        // bool? + EmitDefaultValue=false：缺省(未写)=false 不启用；显式 true=启用。
+        [DataMember(Name = "edgeAutoHide", EmitDefaultValue = false)] public bool? EdgeAutoHide = null;
+        public bool EdgeAutoHideEffective => EdgeAutoHide ?? false;
+        // 搜索时是否顺带做 Everything 全盘搜索（把本地没建图标、但磁盘上存在的文件也搜出来）。
+        // 默认开，但 Everything 是「第一次真的用到搜索时才拉起」，不影响启动速度。
+        // bool? + EmitDefaultValue=false：缺省(未写)=true 启用；显式 false=关闭。
+        [DataMember(Name = "everythingSearch", EmitDefaultValue = false)] public bool? EverythingSearch = null;
+        public bool EverythingSearchEffective => EverythingSearch ?? true;
     }
 
     // 快捷键绑定：全部可在 launcher.json 的 hotkeys 段自定义（组合串形如 "Ctrl+Shift+T"、"Ctrl+`"、"A"、"1"）
@@ -50,6 +62,7 @@ namespace launcher.Core
         [DataMember(Name = "path")] public string Path;
         [DataMember(Name = "isFolder")] public bool IsFolder;
         [DataMember(Name = "icon")] public string Icon;
+        [DataMember(Name = "name")] public string Name;
     }
 
     [DataContract]
@@ -138,7 +151,7 @@ namespace launcher.Core
                     var list = new List<SlotData>();
                     if (p.Slots != null)
                         foreach (var s in p.Slots)
-                            list.Add(new SlotData { Index = s.Index, FilePath = s.Path ?? string.Empty, IsFolder = s.IsFolder, IconPath = s.Icon ?? string.Empty });
+                            list.Add(new SlotData { Index = s.Index, FilePath = s.Path ?? string.Empty, IsFolder = s.IsFolder, IconPath = s.Icon ?? string.Empty, DisplayName = s.Name ?? string.Empty });
                     string name = NormalizePageName(p.Name); // 退役遗留内部键 panel_dotN
                     Pages[name] = list;
                     PageNames.Add(name);
@@ -170,6 +183,7 @@ namespace launcher.Core
             Layout.Columns = Math.Max(1, Math.Min(Layout.Columns, 40));
             Layout.Width = Math.Max(0, Math.Min(Layout.Width, 4000));
             Layout.Height = Math.Max(0, Math.Min(Layout.Height, 4000));
+            Layout.Opacity = Math.Max(30, Math.Min(Layout.Opacity, 100));
 
             foreach (var name in PageNames)
             {
@@ -277,7 +291,7 @@ namespace launcher.Core
                         foreach (var s in Pages[name])
                         {
                             if (s != null && !string.IsNullOrEmpty(s.FilePath))
-                                pd.Slots.Add(new SlotDoc { Index = s.Index, Path = s.FilePath, IsFolder = s.IsFolder, Icon = s.IconPath });
+                                pd.Slots.Add(new SlotDoc { Index = s.Index, Path = s.FilePath, IsFolder = s.IsFolder, Icon = s.IconPath, Name = s.DisplayName });
                         }
                     }
                     doc.Pages.Add(pd);

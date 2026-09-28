@@ -40,6 +40,16 @@ namespace launcher.Core
                     try { MessageBox.Show("程序遇到严重错误，详情已记录到 launcher.log：\n" + ((e.ExceptionObject as Exception)?.Message ?? e.ExceptionObject?.ToString()), "严重错误", MessageBoxButtons.OK, MessageBoxIcon.Error); } catch { }
                 };
 
+                // Everything64.dll 随附在 everything\ 子目录里，而 P/Invoke 默认只搜 exe 同级目录，
+                // 这里把该子目录加进 DLL 搜索路径，DllImport("Everything64.dll") 才找得到。
+                // 找不到也不影响启动 —— 这时全盘搜索会自动降级到 es.exe。
+                try
+                {
+                    string dllDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "everything");
+                    if (System.IO.Directory.Exists(dllDir)) SetDllDirectory(dllDir);
+                }
+                catch { }
+
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new Launcher());
@@ -70,6 +80,10 @@ namespace launcher.Core
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetDllDirectory(string lpPathName);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

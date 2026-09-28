@@ -5,6 +5,153 @@
 
 ---
 
+## 2026-09-28（界面全面重构 Fluent 化 + Everything 全盘搜索 + 便签独立窗口 + 贴边隐藏，v1.1.0 发布版）
+
+- **UI 全面重构（借鉴 WinKit-v2.1.2 / Fluent 设计语言）**：
+  - 新建 `Core/UiMetrics.cs` 设计令牌层（8pt 间距栅格、圆角分级、控件尺寸），全项目布局常量唯一来源；
+  - `Core/ThemePalette.cs` 重写为 Fluent 四层色阶（Base/Layer/Card/Control）+ alpha 叠加悬停，深浅两主题；
+  - `Controls/UiKit.cs` 重写：`SideTabBar`（圆角块+3px 左条）、`ToggleSwitch`（40×22）、`FlatListBox`（淡强调底+圆头左条）、`SectionCard`、`FlatMenuRenderer`（圆角+投影）等全套自绘控件；
+  - 图标改 **Segoe MDL2 Assets 字体绘制**（矢量、任意尺寸无锯齿），替换原 1.5px 描边手绘路径；
+  - 窗口圆角双路径：Win11 走 DWM 原生，Win10 用桌面色采样+假半透明+Region 半径+1 治锯齿（`Core/WindowCorners.cs`）；
+  - 三窗口（主面板/设置/便签）+ 两对话框的标题栏、关闭按钮（悬停红底白叉）、命中测试全部统一（`Core/WindowChrome.cs`）；删除只服务关闭键的 `TitleBarButton`；
+  - 设置面板重写为卡片分组式，新增「贴边自动隐藏」「Everything 全盘搜索（含【检测】自检按钮）」「窗口透明度」项；`CommandDialog`/`PageNameDialog` 改全自绘。
+- **Everything 全盘搜索**（新建 `Core/EverythingSearch.cs`）：搜索框打字即搜——先匹配本机图标，再自动追加 Everything 全盘命中（≤40 条，图标现场提取）。三级降级链：SDK（`Everything64.dll` 直查，需 64 位进程）→ 自动拉起捆绑 `everything\Everything.exe` → `es.exe` 命令行。设置面板【检测】按钮走真实链路自检，回显「就绪（SDK/命令行模式）· 已索引 N 项」，可区分「未运行 / 索引为空 / 不可用（原因）」。
+- **进程位数修正**：csproj 显式 `<Prefer32Bit>false</Prefer32Bit>`（VS 对 WinExe 默认 true → 进程实为 32 位，加载 64 位 `Everything64.dll` 必抛 `BadImageFormatException`）。现 CorFlags=0x00000001，64 位系统跑 64 位进程，SDK 直查可用。
+- **便签拆为独立窗口**（新建 `Controls/NotesWindow.cs`，替代原主面板内嵌区）：无边框自绘 chrome、左缘多便签列表（点击切换/新建/删除）、内容卡片、自动保存（`notes/` 目录每条一个 .txt，旧 notes.txt 自动迁移）；不设 Owner，主面板失焦隐藏不带走便签。
+- **贴边自动隐藏**（新建 `Controls/EdgeAutoHide.cs`）：吸附 18px / 露出 12px / 悬停 500ms / 停稳 280ms / 缓动 160ms；置顶钉住与失焦隐藏交互冲突已豁免。
+- **搜索栏重构（图标展开式）**：标题栏默认只有一个放大镜图标，点开原地展开为输入框（Esc/失焦收起）；修复 4 个缺陷——窄窗展开时放大镜消失且输入框不出现、展开时品牌名凭空消失、`RoundSearchBox` 双输入框内核（焦点边框永不亮）、`_searchBarOpen` 与可见性双状态源。
+- **窗口尺寸回弹修复（两轮）**：① `OnResizeBegin/End` 对纯移动同样触发，旧逻辑把"移动窗口"当"缩放结束"补重排，把用户改矮的高度撑回去——改为比对整块 ClientSize，没变直接返回；② `ApplyAutoHeight` 兜底分支在用户拖右下角（宽度高度同变）时仍会撑高——`_heightFromUser` 生效后高度一字不动，仅保留"矮到放不下一行图标"的最小可读兜底。
+- **其他**：删掉五处 `CS_DROPSHADOW`（矩形投影与 Region 圆角冲突，四角留方角残影）；托盘菜单精简为「显示/隐藏 · 设置 · 退出」，其余收进设置面板；标题栏新增设置齿轮入口；图标槽位悬停自绘圆角高亮；缩窄窗口时底部页签被图标遮挡（z-order）修复。
+
+## 2026-09-27（多便签管理：边缘列表 + 点击切换 + 旧数据迁移）
+
+- 便签从单文件升级为**多便签**：`Core/NotesStore.cs` 每条一个 .txt 存于 `notes/` 目录；首次运行把旧 `notes.txt` 自动迁移为「便签 1.txt」（旧文件改名备份，零丢失）。
+- 便签面板左缘列表排列所有便签，点击切换；顶部「＋」新建、「×」删除当前（二次确认）；切换/关闭不丢内容。
+- **影响文件**：`Core/NotesStore.cs`(新)、`Controls/Form1.cs`、`launcher.csproj`。
+
+## 2026-09-26（便签 Markdown 预览支持表格渲染）
+
+- `Core/MarkdownRenderer.cs` 支持管道表格：表头底纹加粗、`:---:` 对齐（左/中/右）、列宽按内容自适应；预览为 RTF 输出。
+- **影响文件**：`Core/MarkdownRenderer.cs`、`launcher.csproj`。
+
+## 2026-09-02（下拉选择框组件 + 常见 GUID/shell 命令预设）
+
+- **需求**：添加命令/路径时提供下拉选择框，输入框右侧三角箭头，点击展开常见 GUID/shell 命令列表，选中回填。
+- **实现**：
+  - 新建 `Controls/CommandComboBox.cs`：继承 `ComboBox`（`DropDown` 样式，可编辑+下拉），`DisplayMember` 显示友好名称，`SelectedIndexChanged` 时把选中项的 `Command` 回填到 `Text`。用户也可直接输入自定义命令。
+  - 预设 22 项：此电脑/控制面板/回收站/我的文档/网络（GUID）、桌面/下载/文档/图片/音乐/视频/应用列表/设备和打印机/管理工具（shell: 路径）、命令提示符/PowerShell/任务管理器/注册表编辑器/系统配置/远程桌面/计算器/记事本（shell 命令）。
+  - `Controls/CommandDialog.cs` 的命令输入框由 `TextBox` 改为 `CommandComboBox`。
+- **用法**：右键槽位 →「添加命令/路径...」→ 命令框点右侧三角 → 选预设（如"此电脑"）→ 命令自动回填 `::{20D04FE0-...}` → 填显示名称 → 确定。
+- **影响文件**：`Controls/CommandComboBox.cs`(新)、`Controls/CommandDialog.cs`、`launcher.csproj`。
+- **验证**：`dotnet build` 0 错误 0 警告；`dotnet test` 67/67 通过。
+
+## 2026-09-02（槽位显示名称 + 添加命令对话框双字段）
+
+- **需求**：命令/GUID 槽位只有图标没有文字标签，"不知道哪个是哪个"。要能添加自定义显示名称。
+- **实现**：
+  - `Models/SlotData.cs` 加 `[DataMember] DisplayName` 字段；`Core/ConfigStore.cs` 的 `SlotDoc` 加 `name` 字段，读写映射。
+  - `Controls/IconRenderer.cs` 的 `DrawLabel` 加 `displayName` 参数：有自定义名称时优先显示且总是画标签（即使非文件夹/URL/图片）；`Draw`/`RenderToBitmap`/`ComposeBitmap` 透传 `displayName`。
+  - `Controls/Form1.cs` 所有 `ComposeBitmap` 调用传 `data.DisplayName`；`AddOrEditCommand` 改用新建的 `CommandDialog`（双字段：命令/路径 + 显示名称）。
+  - 新建 `Controls/CommandDialog.cs`：双输入框对话框（命令/路径 + 显示名称可选），随主题配色。
+- **用法**：右键槽位 →「添加命令/路径...」→ 填命令 + 填名称（可选）→ 确定。名称显示在图标下方。编辑时回填现有命令与名称。
+- **影响文件**：`Models/SlotData.cs`、`Core/ConfigStore.cs`、`Controls/IconRenderer.cs`、`Controls/Form1.cs`、`Controls/CommandDialog.cs`(新)、`launcher.csproj`。
+- **验证**：`dotnet build` 0 错误 0 警告；`dotnet test` 67/67 通过。
+
+## 2026-09-02（右键菜单「添加/编辑命令/路径」GUI 入口）
+
+- **需求**：手改 `launcher.json` 添加 GUID/shell 命令太麻烦，要 GUI 添加方式。
+- **实现**：
+  - `Controls/IconSlot.cs` 右键菜单新增「添加命令/路径...」项（空槽）/「编辑命令/路径...」（非空槽），始终启用；新增 `AddCommandRequested` 事件。
+  - `Controls/Form1.cs` 新增 `AddOrEditCommand`：用 `PageNameDialog`（label 改「命令/路径：」）弹输入框，用户填命令/GUID/路径，写入槽位 + 保存 + 渲染。图标由用户后续右键「设置自定义图标」提供。
+  - `Controls/PageNameDialog.cs` 加可选 `labelText` 参数，复用为命令输入框。
+- **用法**：右键任意槽位 →「添加命令/路径...」→ 输入（如 `::{20D04FE0-...}`、`cmd /c dir`、`shell:AppsFolder`）→ 确定 → 右键「设置自定义图标」配图标。
+- **影响文件**：`Controls/IconSlot.cs`、`Controls/Form1.cs`、`Controls/PageNameDialog.cs`。
+- **验证**：`dotnet build` 0 错误 0 警告；`dotnet test` 67/67 通过。
+
+## 2026-09-02（支持 GUID/shell: 跳转 + shell 命令执行）
+
+- **需求**：槽位除文件/文件夹/URL 外，还需支持 Windows shell 命名空间 GUID（`::{CLSID}`，如此电脑/回收站/控制面板）、`shell:` 路径（如 `shell:AppsFolder`）、以及带参数的 shell 命令（如 `cmd /c dir`、`powershell -Command ...`）。用户自行在 `launcher.json` 的 `path` 字段填入命令/路径，图标用右键「设置自定义图标」提供。
+- **实现**：`Controls/Form1.cs` 的 `OpenSlot` 抽出统一启动入口 `LaunchPath(filePath, isFolder)`，按前缀/特征分发：
+  - `::` 开头（GUID）或 `shell:` 开头 → `explorer.exe` 打开（shell 命名空间）
+  - `http(s)://` → 默认浏览器
+  - 文件夹（`isFolder` 或 `Directory.Exists`）→ `explorer.exe`
+  - 其他 → 先 `Process.Start(filePath)`（关联打开/.exe/.lnk），失败则 `ParseCommandLine` 解析为命令+参数，用 `ProcessStartInfo(UseShellExecute=false)` 执行（`UseShellExecute=false` 才能正确处理 `cmd /c echo > file` 等带重定向/管道的命令）
+  - `ParseCommandLine`：支持引号包裹的路径 + 多参数
+- **影响文件**：`Controls/Form1.cs`。
+- **验证**：`dotnet build` 0 错误 0 警告；`dotnet test` 67/67 通过；反射调 `LaunchPath("cmd /c echo ok > file", false)` 成功写文件。
+
+## 2026-09-02（拖出创建快捷方式 + 配置热更新防抖补全 + 版本号对齐 v1.1.0）
+
+### 拖出槽位到桌面/资源管理器 = 创建快捷方式
+
+- **需求**：从 launcher 拖一个图标到桌面/资源管理器，在目标位置创建快捷方式（.lnk / .url），而非移动原文件。
+- **实现**：
+  - `Controls/IconRenderer.cs` 新增 `CreateShortcut(lnkPath, targetPath)`（用 `WScript.Shell` COM，与 `GetShortcutTargetFile` 对称）。
+  - `Controls/IconSlot.cs` 的 `OnMouseMove` 拖出时改用 `DataObject` 同时提供 `IconSlot`（槽位间排序）+ `FileDrop`（指向临时 `.lnk`/`.url`）。拖到另一个槽位走排序；拖到外部时资源管理器复制临时快捷方式文件到目标位置。拖放后清理临时文件。
+  - `PrepareDragOutFile`：文件/文件夹→临时 `.lnk`（COM 创建），URL→临时 `.url`（`[InternetShortcut]` 纯文本）。
+  - `OnDragEnter`/`OnDragDrop` 检查顺序改为 `IconSlot` 优先于 `FileDrop`，避免拖出槽位时被当作外部拖入。
+- **影响文件**：`Controls/IconRenderer.cs`、`Controls/IconSlot.cs`。
+
+### 配置热更新防抖补全（监听 Renamed 事件）
+
+- **背景**：`ConfigWatcher` 已有 250ms 防抖，但只监听 `Changed`/`Created`，未监听 `Renamed`。部分编辑器（如 VS Code）用「写临时文件 → rename 替换」做原子写，只触发 `Renamed`，导致热更新失效。
+- **实现**：`Core/ConfigWatcher.cs` 加 `_watcher.Renamed += OnChanged;`。
+- **影响文件**：`Core/ConfigWatcher.cs`。
+
+### 版本号对齐 v1.1.0
+
+- **背景**：gitee release 为 v1.0.3，README 写 1.0.0，csproj 为 1.0.0.*，AssemblyInfo 为 1.0.0.0——代码已叠加大量改动，版本号不统一。
+- **实现**：统一升到 **1.1.0**：`Properties/AssemblyInfo.cs`（`AssemblyVersion`/`FileVersion` → 1.1.0.0）、`launcher.csproj`（`ApplicationVersion` → 1.1.0.*）、`README.md`（版本：1.1.0）。`AboutForm` 读 `AssemblyVersion` 自动显示新版本。
+- **影响文件**：`Properties/AssemblyInfo.cs`、`launcher.csproj`、`README.md`。
+
+- **验证**：`dotnet build -c Release` 0 错误 0 警告；`dotnet test` 67/67 通过；exe 版本=1.1.0.0；冒烟启动存活、日志正常。
+
+## 2026-09-02（性能三件套：切页分批渲染 + 图标磁盘缓存 + Logger 修复）
+
+### 切页分批渲染（推广启动分批到切页）
+
+- **背景**：此前已把**启动**渲染改为分批，但 `SwitchToPage` → `EnsurePageLoaded` → `LoadPageToCache` 仍是同步整页渲染。首次切到未缓存页时，多图标仍会阻塞消息循环导致鼠标卡顿。
+- **实现**：`Controls/Form1.cs` 的 `SwitchToPage` 改为——已缓存页直接 `LoadPageFromCache` 显示；未缓存页调 `StartInitialPageRender` 分批渲染（复用启动分批逻辑）。`StartInitialPageRender` 开头先停旧 Timer，防快速连切页时多个 Timer 并行。搜索/主题切换保持同步（通常操作已缓存页，不触发整页渲染）。
+- **影响文件**：`Controls/Form1.cs`。
+
+### 图标磁盘缓存（避免每次启动重新提取系统图标）
+
+- **背景**：每次启动/切页都对每个非空槽位调 `Icon.ExtractAssociatedIcon`/`ExtractIconEx`（P/Invoke + 磁盘 I/O）重新提取系统图标，机械盘上启动慢。
+- **实现**：`Controls/IconRenderer.cs` 的 `RenderIconOnly` 加磁盘缓存——系统图标（非自定义、非 URL、非 `.lnk`、文件/文件夹存在）按 `MD5(路径) + mtime + iconSize` 为键缓存为 png 到 `iconcache/` 目录。命中直接读 png 返回，跳过 P/Invoke + 2× 超采样；未命中则提取 + 渲染 + 存盘。读缓存用 `FileStream`+`FromStream`+拷贝避免锁文件；写缓存先写 `.tmp` 再 `Move` 避免半写被读到。自定义图标/URL/`.lnk`/不存在文件不缓存。
+- **影响文件**：`Controls/IconRenderer.cs`。
+- **验证**：含 notepad.exe + System32 文件夹的配置启动后，`iconcache/` 生成 2 个 png（`{md5}_{mtime}_{size}.png`），二次启动直接读缓存。
+
+### 修复 Logger 写不成功（诊断能力恢复）
+
+- **现象**：冒烟测试 `launcher.json` 正常生成但 `launcher.log` 始终未出现，"打不开却无提示"的诊断能力丧失。
+- **根因**：`Core/Logger.cs` 用 `Application.StartupPath` 定位日志目录，该属性在部分环境下返回异常值。`ConfigStore` 用 `AppDomain.CurrentDomain.BaseDirectory` 能正常写，两者不一致。
+- **实现**：`Logger` 改用 `AppDomain.CurrentDomain.BaseDirectory`（与 `ConfigStore` 一致），去掉 `Application.StartupPath`；catch 里把写入失败原因单独记到 `logger-err.txt`，避免完全静默。
+- **影响文件**：`Core/Logger.cs`。
+
+- **验证**：`dotnet build -c Release` 0 错误 0 警告；`dotnet test` 67/67 通过；冒烟启动 `launcher.log` 正常生成（含热键注册/启动完成/钩子启用），`iconcache/` 正常生成。
+
+## 2026-09-02（修复自定义图标失效 + 启动慢/鼠标卡顿）
+
+### 修复自定义图标失效（确定性 bug）
+
+- **现象**：右键槽位「设置自定义图标」选图后，图标不变化，仍显示原系统图标。
+- **根因**：`Form1.SetSlotIcon` 设置 `slot.Data.IconPath` 后调 `RenderSlotFromStore`，但 `RenderSlotFromStore` 仅在 `data.RawIcon == null` 时才调 `RenderIconOnly` 重新提取纯图标。`slot.Data` 与 store 中是同一对象引用，已有图标的槽位 `RawIcon` 在首次渲染时已赋值非空，故 `RenderIconOnly` 被跳过，`ComposeBitmap` 仍用旧 `RawIcon`（系统图标）合成，自定义图标永远不生效。`ClearSlotIcon` 同理（清除后仍用含自定义图标的旧 `RawIcon`，不会回退系统图标）。
+- **实现**：`Controls/Form1.cs` 的 `SetSlotIcon`/`ClearSlotIcon` 在改完 `IconPath` 后调 `slot.Data.DisposeImage()` 清除旧 `RawIcon`/`CachedImage`，强制 `RenderSlotFromStore` 重新提取（这次走自定义图标路径）。
+- **影响文件**：`Controls/Form1.cs`。
+
+### 修复启动慢 + 鼠标滑动卡顿
+
+- **现象**：打开 launcher 后启动速度较慢，鼠标滑动有明显卡顿/延迟。
+- **根因**：构造函数同步调 `EnsurePageLoaded` → `LoadPageToCache`，对当前页每个非空槽位做 2× 超采样 + 提取系统图标（P/Invoke + 磁盘 I/O）+ GDI+ 合成，一页 30-40 个图标阻塞 UI 线程消息循环数百毫秒到数秒。`WH_MOUSE_LL` 低级鼠标钩子回调必须由 UI 线程消息循环执行，渲染期间全局鼠标事件排队 → 光标移动卡顿/发飘。此前 2026-08-10 只推迟了钩子安装，未推迟渲染，启动时渲染仍阻塞。
+- **实现**：`Controls/Form1.cs`：
+  - 构造函数移除 `EnsurePageLoaded` + `LoadPageFromCache`，只保留 `ApplyThemeVisuals`（设背景色/圆点，快，不渲染图标）。
+  - `Shown` 事件安装钩子后，用 `Timer`**分批渲染**当前页图标（每 5ms 渲染 4 个），消息循环在渲染间隙处理鼠标事件（含低级鼠标钩子回调），不再卡顿。
+  - 渲染期间用户切页则停止分批，交由 `SwitchToPage` 的 `EnsurePageLoaded` 接管；渲染完成后登记到 `_pageCacheLoaded`/`_pageTouchOrder` 并执行 LRU 驱逐。
+  - `OnFormClosing` 真正退出分支清理 `_initialRenderTimer`。
+- **影响文件**：`Controls/Form1.cs`。
+
+- **验证**：`dotnet build -c Release` 0 错误 0 警告；`dotnet test` 67/67 通过；冒烟启动进程存活、`launcher.json` 正常生成、配置结构正确。
+
 ## 2026-08-10（修复开机自启时卡顿/鼠标发飘）
 
 - **鼠标钩子推迟到首次显示后安装，消除开机自启卡顿**：

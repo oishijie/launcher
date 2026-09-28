@@ -5,15 +5,24 @@ using System.Windows.Forms;
 
 namespace launcher.Controls
 {
-    // 分页指示圆点：替代原先散落生成的 panel_dot1..N。
-    // 自己负责绘制与点击命中，发出 PageSelected(页索引) 语义事件。
-    // 每个圆点下方绘制页码，悬停显示「第 N 页 · 页名」提示，右键触发 PageRenameRequested 供重命名。
+    // 分页指示圆点（胶囊样式）：替代原先散落生成的 panel_dot1..N。
+    //
+    // 相比旧版的变化：
+    //   旧：12px 圆点 + 每个圆点正下方挂一个小号页码数字 —— 密、土、噪声大；
+    //   新：未选中为 8px 圆点，选中项拉伸成 22px 胶囊（现代分页控件的主流做法），
+    //       页名信息改由悬停提示承载，不再常驻占位。
+    //
+    // 交互语义完全保持：左键 PageSelected(索引)、右键 PageRenameRequested(索引)。
     public class PageIndicator : Control
     {
-        private int _count;
+        private const int DotSize = 9;   // 未选中圆点直径
+        private const int CapW = 22;     // 选中胶囊宽度（同时也是每个条目的固定槽宽，避免选中变化引起布局抖动）
+        private const int Gap = 8;
+        private const int PadY = 4;      // 上下留白（悬停放大时不裁切）
+
+        private int _count = 1;
         private int _selected;
-        private readonly int _dotSize = 12;
-        private readonly int _dotGap = 12;
+        private int _hover = -1;
         private Color _active = Color.White;
         private Color _inactive = Color.Gray;
         private List<string> _pageNames = new List<string>();
@@ -22,18 +31,30 @@ namespace launcher.Controls
         public int SelectedIndex
         {
             get { return _selected; }
-            set { _selected = value; Invalidate(); }
+            set
+            {
+                if (_selected == value) return;
+                _selected = value;
+                Invalidate();
+            }
         }
 
         public event EventHandler<int> PageSelected;
         public event EventHandler<int> PageRenameRequested;
+
+        public PageIndicator()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+                   | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Size = new Size(CapW, DotSize + PadY * 2);
+        }
 
         public void Setup(int count, Color active, Color inactive)
         {
             _count = Math.Max(1, count);
             _active = active;
             _inactive = inactive;
-            this.Size = new Size(_count * _dotSize + (_count - 1) * _dotGap, _dotSize + 16);
+            Size = new Size(_count * CapW + (_count - 1) * Gap, DotSize + PadY * 2);
             Invalidate();
         }
 
@@ -56,43 +77,54 @@ namespace launcher.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e);
-            var numFont = new Font("Microsoft YaHei UI", 7.5f, FontStyle.Regular);
-            try
+            var g = e.Graphics;
+            UiDraw.Setup(g);
+            float cy = Height / 2f;
+
+            for (int i = 0; i < _count; i++)
             {
-                for (int i = 0; i < _count; i++)
+                int slotX = i * (CapW + Gap);
+                if (i == _selected)
                 {
-                    int x = i * (_dotSize + _dotGap);
-                    using (Brush b = new SolidBrush(i == _selected ? _active : _inactive))
-                    {
-                        e.Graphics.FillEllipse(b, x + 1, 1, _dotSize, _dotSize);
-                    }
-                    // 圆点下方页码（深色主题下用浅灰，浅色主题下用深灰，始终可读）
-                    using (Brush nb = new SolidBrush(_selected == i ? _active : Color.FromArgb(_inactive.GetBrightness() > 0.5f ? 90 : 170, _inactive)))
-                    {
-                        string num = (i + 1).ToString();
-                        SizeF sz = e.Graphics.MeasureString(num, numFont);
-                        e.Graphics.DrawString(num, numFont, nb, x + 1 + (_dotSize - sz.Width) / 2f, _dotSize + 3);
-                    }
+                    // 选中：拉伸成胶囊。高度与圆点一致，避免切换时产生"跳一下"的观感
+                    var r = new Rectangle(slotX, (int)(cy - DotSize / 2f), CapW, DotSize);
+                    using (var path = UiDraw.Round(r, DotSize / 2))
+                    using (var b = new SolidBrush(_active))
+                        g.FillPath(b, path);
+                }
+                else
+                {
+                    // 未选中：圆点，悬停时放大并提亮
+                    int d = (i == _hover) ? DotSize + 2 : DotSize;
+                    float x = slotX + (CapW - d) / 2f;
+                    Color c = (i == _hover) ? UiDraw.Blend(_inactive, _active, 0.45f) : _inactive;
+                    using (var b = new SolidBrush(c))
+                        g.FillEllipse(b, x, cy - d / 2f, d, d);
                 }
             }
-            finally { numFont.Dispose(); }
+        }
+
+        private int HitTest(int x)
+        {
+            int i = x / (CapW + Gap);
+            return (i >= 0 && i < _count) ? i : -1;
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
             int idx = HitTest(e.X);
+            if (idx != _hover) { _hover = idx; Invalidate(); }
+
             if (_tooltip == null) _tooltip = new ToolTip();
-            if (idx >= 0 && idx < _count)
-                _tooltip.SetToolTip(this, PageLabel(idx));
-            else if (idx < 0 || idx >= _count)
-                _tooltip.Hide(this);
+            if (idx >= 0) _tooltip.SetToolTip(this, PageLabel(idx));
+            else _tooltip.Hide(this);
         }
 
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
+            if (_hover != -1) { _hover = -1; Invalidate(); }
             if (_tooltip != null) _tooltip.Hide(this);
         }
 
@@ -102,7 +134,7 @@ namespace launcher.Controls
             if (e.Button == MouseButtons.Right)
             {
                 int idx = HitTest(e.X);
-                if (idx >= 0 && idx < _count) PageRenameRequested?.Invoke(this, idx);
+                if (idx >= 0) PageRenameRequested?.Invoke(this, idx);
             }
         }
 
@@ -111,9 +143,7 @@ namespace launcher.Controls
             base.OnMouseClick(e);
             if (e.Button != MouseButtons.Left) return;
             int idx = HitTest(e.X);
-            if (idx >= 0 && idx < _count) PageSelected?.Invoke(this, idx);
+            if (idx >= 0) PageSelected?.Invoke(this, idx);
         }
-
-        private int HitTest(int x) => x / (_dotSize + _dotGap);
     }
 }

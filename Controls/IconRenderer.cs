@@ -4,6 +4,8 @@ using System.Drawing.Drawing2D;
 using System.Linq;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Forms;
 using launcher.Core;
 
@@ -13,7 +15,7 @@ namespace launcher.Controls
     internal static class IconRenderer
     {
         // 渲染一个槽位到位图（2x 超采样后缩回原尺寸，保证清晰），返回位图由调用方持有
-        public static Image RenderToBitmap(int width, int height, string filePath, ThemePalette palette, string iconPath = null)
+        public static Image RenderToBitmap(int width, int height, string filePath, ThemePalette palette, string iconPath = null, string displayName = null)
         {
             using (Bitmap bmp = new Bitmap(width * 2, height * 2))
             using (Graphics g = Graphics.FromImage(bmp))
@@ -23,7 +25,7 @@ namespace launcher.Controls
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                Draw(g, width, height, filePath, palette, iconPath);
+                Draw(g, width, height, filePath, palette, iconPath, displayName);
 
                 using (Bitmap finalBmp = new Bitmap(width, height))
                 using (Graphics gf = Graphics.FromImage(finalBmp))
@@ -35,16 +37,25 @@ namespace launcher.Controls
             }
         }
 
-        public static void Draw(Graphics g, int width, int height, string filePath, ThemePalette palette, string iconPath = null)
+        public static void Draw(Graphics g, int width, int height, string filePath, ThemePalette palette, string iconPath = null, string displayName = null)
         {
             if (string.IsNullOrEmpty(filePath)) return;
             DrawIconPart(g, width, height, filePath, iconPath);
-            DrawLabel(g, width, height, filePath, palette);
+            DrawLabel(g, width, height, filePath, palette, displayName);
         }
 
         // 渲染纯图标部分（不含文字标签），2x 超采样后缩回原尺寸。用于 RawIcon 缓存。
         public static Image RenderIconOnly(int width, int height, string filePath, string iconPath = null)
         {
+            // 磁盘缓存：系统图标（非自定义、非 URL、非 .lnk、文件/文件夹存在）按 路径+mtime+尺寸 缓存为 png，
+            // 避免每次启动/切页都调 ExtractAssociatedIcon/ExtractIconEx（P/Invoke + 磁盘 I/O）重新提取。
+            string cachePath = TryGetIconCachePath(width, filePath, iconPath);
+            if (cachePath != null)
+            {
+                Image cached = TryLoadIconCache(cachePath);
+                if (cached != null) return cached;
+            }
+
             using (Bitmap bmp = new Bitmap(width * 2, height * 2))
             using (Graphics g = Graphics.FromImage(bmp))
             {
@@ -59,14 +70,116 @@ namespace launcher.Controls
                 {
                     gf.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     gf.DrawImage(bmp, 0, 0, width, height);
-                    return (Image)finalBmp.Clone();
+                    Image result = (Image)finalBmp.Clone();
+                    if (cachePath != null) TrySaveIconCache(cachePath, result);
+                    return result;
                 }
+            }
+        }
+
+        // 计算磁盘缓存路径；返回 null 表示该项不应缓存（URL / 路径不存在）。
+        // 缓存键 = 类型 + MD5(关键路径) + 源文件 mtime + 源文件大小 + 图标尺寸，任一变化即失效重新提取。
+        //
+        // 【性能关键】.lnk 与自定义图标现在也纳入缓存。旧实现直接对二者 return null，
+        // 导致每次冷启动都要走 WScript.Shell COM 解析 .lnk 目标 + ExtractAssociatedIcon/ExtractIconEx
+        // （P/Invoke + 磁盘 I/O）；而启动器槽位以 .lnk 为主，于是「每次启动都卡」。
+        // 现按快捷方式/图标文件自身的 mtime+size 做键：重建快捷方式（改了目标）会使 mtime 变化而自动失效；
+        // 目标程序更新但快捷方式没动这类少数情况，用设置面板的「清除图标缓存」强制刷新。
+        private static string TryGetIconCachePath(int size, string filePath, string iconPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(filePath)) return null;
+                if (UrlUtil.IsHttpUrl(filePath)) return null;          // URL 地球字形是纯矢量绘制，无需缓存
+
+                // 自定义图标：按「图标文件自身」的 mtime+size 缓存（与槽位目标路径无关）
+                if (!string.IsNullOrEmpty(iconPath))
+                {
+                    string resolved = ResolveIconPath(iconPath);
+                    if (!File.Exists(resolved)) return null;
+                    var fi = new FileInfo(resolved);
+                    return CachePathFor("custom", resolved, size, fi.LastWriteTimeUtc.Ticks, fi.Length);
+                }
+
+                long mtime, fsize;
+                if (Directory.Exists(filePath)) { mtime = Directory.GetLastWriteTimeUtc(filePath).Ticks; fsize = 0; }
+                else if (File.Exists(filePath))
+                {
+                    var fi = new FileInfo(filePath);
+                    mtime = fi.LastWriteTimeUtc.Ticks; fsize = fi.Length;
+                }
+                else return null; // 不存在不缓存（GetFileIcon 会退回默认图标，但下次可能文件就存在了）
+
+                return CachePathFor("path", filePath, size, mtime, fsize);
+            }
+            catch { return null; }
+        }
+
+        // 组装缓存文件路径。kind 区分「自定义图标 / 普通路径」，避免同名不同源互相覆盖。
+        private static string CachePathFor(string kind, string key, int size, long mtime, long fsize)
+        {
+            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "iconcache");
+            string name = kind + "_" + StableHash(key) + "_" + mtime + "_" + fsize + "_" + size + ".png";
+            return Path.Combine(dir, name);
+        }
+
+        // 清空磁盘图标缓存（供设置面板「清除图标缓存」调用）。
+        // 返回删除的文件数；目录不存在返回 0；失败返回 -1。
+        public static int ClearIconCache()
+        {
+            try
+            {
+                string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "iconcache");
+                if (!Directory.Exists(dir)) return 0;
+                int n = Directory.GetFiles(dir, "*.png").Length;
+                Directory.Delete(dir, true);
+                return n;
+            }
+            catch { return -1; }
+        }
+
+        // 读缓存位图：用 FileStream + FromStream + 拷贝，避免 Image.FromFile 长期锁文件
+        private static Image TryLoadIconCache(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (var tmp = Image.FromStream(fs))
+                    return new Bitmap(tmp);
+            }
+            catch { return null; }
+        }
+
+        // 写缓存：先写 .tmp 再 Move，避免半写文件被读到
+        private static void TrySaveIconCache(string path, Image icon)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                string tmp = path + ".tmp";
+                icon.Save(tmp, System.Drawing.Imaging.ImageFormat.Png);
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(tmp, path);
+            }
+            catch { }
+        }
+
+        // 稳定哈希（不随进程变化，不同于 string.GetHashCode）：MD5 取前 16 hex 字符
+        private static string StableHash(string s)
+        {
+            using (var md5 = MD5.Create())
+            {
+                byte[] bytes = md5.ComputeHash(Encoding.UTF8.GetBytes(s));
+                var sb = new StringBuilder(16);
+                for (int i = 0; i < 8; i++) sb.Append(bytes[i].ToString("x2"));
+                return sb.ToString();
             }
         }
 
         // 将缓存的纯图标位图与当前主题的文字标签合成为最终位图。
         // 主题切换时调用此方法，避免重新提取系统图标（P/Invoke + 磁盘 I/O）。
-        public static Image ComposeBitmap(Image rawIcon, int width, int height, string filePath, ThemePalette palette)
+        public static Image ComposeBitmap(Image rawIcon, int width, int height, string filePath, ThemePalette palette, string displayName = null)
         {
             var result = new Bitmap(width, height);
             using (Graphics g = Graphics.FromImage(result))
@@ -76,7 +189,7 @@ namespace launcher.Controls
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                 g.DrawImage(rawIcon, 0, 0, width, height);
-                DrawLabel(g, width, height, filePath, palette);
+                DrawLabel(g, width, height, filePath, palette, displayName);
             }
             return result;
         }
@@ -118,8 +231,8 @@ namespace launcher.Controls
             }
         }
 
-        // 文字标签绘制（文件名/域名），颜色随主题变化
-        private static void DrawLabel(Graphics g, int width, int height, string filePath, ThemePalette palette)
+        // 文字标签绘制（文件名/域名/自定义名称），颜色随主题变化
+        private static void DrawLabel(Graphics g, int width, int height, string filePath, ThemePalette palette, string displayName = null)
         {
             if (string.IsNullOrEmpty(filePath)) return;
             string fileName = Path.GetFileName(filePath);
@@ -132,17 +245,18 @@ namespace launcher.Controls
                 ".webp",".url",".bat",".toml",".md",".json",".yaml",".yml",".xml",
                 ".zip",".rdp" }.Contains(ext);
 
-            bool shouldShowName = isFolder || isTxt || isImage || isUrl;
+            // 自定义名称优先；有自定义名称时总是显示（即使非文件夹/URL/图片）
+            bool hasCustomName = !string.IsNullOrEmpty(displayName);
+            bool shouldShowName = isFolder || isTxt || isImage || isUrl || hasCustomName;
             if (!shouldShowName) return;
 
             int iconSize = Math.Min(width, height) - 4;
             int iconY = (height - iconSize) / 2;
 
-            string displayName = fileName;
-            if (isUrl)
-            {
-                try { displayName = new Uri(filePath).Host; } catch { }
-            }
+            string label;
+            if (hasCustomName) label = displayName;
+            else if (isUrl) { try { label = new Uri(filePath).Host; } catch { label = fileName; } }
+            else label = fileName;
 
             using (StringFormat sf = new StringFormat())
             {
@@ -156,8 +270,12 @@ namespace launcher.Controls
                 using (GraphicsPath path = new GraphicsPath())
                 {
                     float emSize = font.Size * g.DpiY / 72;
-                    path.AddString(displayName, font.FontFamily, (int)font.Style, emSize, textRect, sf);
-                    using (Pen pen = new Pen(palette.NameStroke, 3))
+                    path.AddString(label, font.FontFamily, (int)font.Style, emSize, textRect, sf);
+                    // 描边从 3px 收到 1px。3px 重描边是 Windows 桌面图标的做法 —— 那时背景是
+                    // 任意壁纸，必须靠粗描边把字从花纹里"抠"出来。但这里是**固定底色**的窗口，
+                    // 重描边只会把 9pt 的字啃细一圈，看起来糊、脏、发灰。
+                    // 留 1px 同底色描边，仅用来压掉抗锯齿边缘的半透明灰边。
+                    using (Pen pen = new Pen(palette.NameStroke, 1f))
                     {
                         pen.LineJoin = LineJoin.Round;
                         g.DrawPath(pen, path);
@@ -352,6 +470,21 @@ namespace launcher.Controls
             {
                 return shortcutFilename;
             }
+        }
+
+        // 创建快捷方式 .lnk：指向 targetPath（用 WScript.Shell COM，与 GetShortcutTargetFile 对称）
+        public static void CreateShortcut(string lnkPath, string targetPath)
+        {
+            try
+            {
+                Type t = Type.GetTypeFromProgID("WScript.Shell");
+                dynamic shell = Activator.CreateInstance(t);
+                var shortcut = shell.CreateShortcut(lnkPath);
+                shortcut.TargetPath = targetPath;
+                shortcut.Save();
+                Marshal.FinalReleaseComObject(shell);
+            }
+            catch { }
         }
 
         [DllImport("shell32.dll", CharSet = CharSet.Auto)]

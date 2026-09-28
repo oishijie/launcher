@@ -32,6 +32,15 @@
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <!-- ⚠️ 必须显式关掉 Prefer32Bit。VS 对 WinExe 项目的默认值是 true，
+         生成 CorFlags = ILONLY|32BITREQUIRED|32BITPREFERRED —— 在 64 位系统上
+         也以 **32 位**进程运行（WOW64）。而捆绑的 Everything64.dll 是 64 位原生库，
+         32 位进程 P/Invoke 它会直接抛 BadImageFormatException（"位数不匹配"），
+         全盘搜索被迫降级到 es.exe 子进程（慢一个数量级）。
+         关掉后 /platform:anycpu，64 位系统上跑 64 位进程，SDK 直查可用。
+         本项目的原生依赖只有系统 DLL（user32/gdi32/shell32/dwmapi/oleacc）+ Everything64.dll，
+         两者在 64 位下都有对应版本，改成 64 位没有兼容代价。 -->
+    <Prefer32Bit>false</Prefer32Bit>
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
@@ -42,6 +51,7 @@
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>   <!-- 原因见上面 Debug 组：不加这一行，进程是 32 位，Everything64.dll 加载不了 -->
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
     <OutputPath>bin\Release\</OutputPath>
@@ -82,10 +92,17 @@
     <Compile Include="Controls\PageNameDialog.cs" />
     <Compile Include="Controls\CommandDialog.cs" />
     <Compile Include="Controls\CommandComboBox.cs" />
-    <Compile Include="Controls\CommandComboBox.cs" />
+    <Compile Include="Controls\SettingsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Controls\NotesWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Controls\UiKit.cs" />
     <Compile Include="Controls\IconRenderer.cs" />
     <Compile Include="Controls\DesktopMouseHook.cs" />
     <Compile Include="Controls\SearchController.cs" />
+    <Compile Include="Controls\EdgeAutoHide.cs" />
     <Compile Include="Core\Program.cs" />
     <Compile Include="Core\ConfigStore.cs" />
     <Compile Include="Core\SearchEngine.cs" />
@@ -94,6 +111,7 @@
     <Compile Include="Core\ConfigExporter.cs" />
     <Compile Include="Core\NotesStore.cs" />
     <Compile Include="Core\MarkdownRenderer.cs" />
+    <Compile Include="Core\UiMetrics.cs" />
     <Compile Include="Core\ThemePalette.cs" />
     <Compile Include="Core\HotkeyBinding.cs" />
     <Compile Include="Core\Logger.cs" />
@@ -101,6 +119,9 @@
     <Compile Include="Core\AutoStartManager.cs" />
     <Compile Include="Core\ConfigWatcher.cs" />
     <Compile Include="Core\UrlUtil.cs" />
+    <Compile Include="Core\WindowCorners.cs" />
+    <Compile Include="Core\WindowChrome.cs" />
+    <Compile Include="Core\EverythingSearch.cs" />
     <Compile Include="Models\SlotData.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\Settings.cs" />
@@ -132,6 +153,24 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Launcher.ico" />
+    <!-- Everything 全盘搜索运行时（借鉴亦安）。Everything64.dll 是 P/Invoke 目标，
+         必须落在 exe 同级目录（用 Link 从 everything\ 平铺出去），否则 DllImport 找不到。 -->
+    <Content Include="everything\Everything.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="everything\Everything.ini">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="everything\Everything.lng">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="everything\es.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="everything\Everything64.dll">
+      <Link>Everything64.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Resources\Launcher.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
