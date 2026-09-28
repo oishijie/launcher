@@ -5,7 +5,7 @@
 - 原项目（上游）：[cornradio/launcher](https://github.com/cornradio/launcher)
 - 软件简介（中文，小众软件论坛）：https://meta.appinn.net/t/topic/67580
 - 本项目（下游维护）：[oishijie/launcher](https://github.com/oishijie/launcher)
-- 版本：1.1.0（v1.1.0：界面全面重构为 Fluent 风格 + Everything 全盘搜索 + 便签独立窗口）
+- 版本：1.2.0（v1.2.0：界面全面重构为 Fluent 风格 + Everything 全盘搜索 + 便签独立窗口）
 
 ---
 
